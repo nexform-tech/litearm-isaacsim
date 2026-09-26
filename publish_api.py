@@ -11,23 +11,30 @@
 收到后反射调用 arm.<api>(**args)，真机动作，同时实时关节角经
 /litearm/joint_state 流转到仿真，仿真跟着动。
 
+参数名即新 SDK（litearm-python-gitee，STM32 直连）的形参名。
+
 用法示例：
-  # 关节空间运动
-  python3 publish_api.py --api movej --args '{"q_target":[0,0.6,0,-1.2,0,0.7,0],"speed":0.1}'
+  # 关节空间运动（q 是目标关节角，speed 0~1）
+  python3 publish_api.py --api movej --args '{"q":[0,0.6,0,-1.2,0,0.7,0],"speed":0.1}'
 
-  # 笛卡尔直线（目标位姿：位置+3x3旋转矩阵）
-  python3 publish_api.py --api movel --args '{"pose_goal":[[0.4,-0.2,0.3],[[1,0,0],[0,1,0],[0,0,1]]],"speed":0.1}'
+  # 笛卡尔直线 / 圆弧（pose = 位置3 + rpy3 或位置3 + 3x3旋转矩阵）
+  python3 publish_api.py --api move_l --args '{"pose":[0.30,0,0.35,3.1416,0,0],"speed":0.1}'
 
-  # 纯计算：fk（返回末端位姿，不打日志到本节点，结果在节点2日志里）
-  python3 publish_api.py --api fk --args '{"q":[0,0,0,0,0,0,0]}'
+  # 固件异步 IK：pose -> 关节角（纯算，结果看节点2日志）
+  python3 publish_api.py --api ik --args '{"pose":[0.30,0,0.35,3.1416,0,0]}'
 
-  # 力控/零重力（⚠️ 会让臂瘫软，人须扶住）
-  python3 publish_api.py --api zero_gravity --args '{}'
+  # 读当前末端位姿（只读）
+  python3 publish_api.py --api get_tcp --args '{}'
 
-  # 急停
-  python3 publish_api.py --api request_stop --args '{}'
+  # 零重力拖动示教（⚠️ 会让臂瘫软，人须扶住；进入后须显式退出）
+  python3 publish_api.py --api zero_g --args '{}'
+  python3 publish_api.py --api zero_g_stop --args '{}'
 
-运行（在 litearm-python .venv 里，且已 source ROS2 Humble）：
+  # 急停 / 使能 / 失能
+  python3 publish_api.py --api emergency_stop --args '{}'
+  python3 publish_api.py --api enable --args '{}'
+
+运行（系统 python3 + ROS2 Humble）：
   source /opt/ros/humble/setup.zsh
 """
 import argparse
@@ -42,9 +49,9 @@ def parse_args():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--api", required=True,
-                    help="要执行的 SDK API 名，如 movej/movel/fk/zero_gravity/request_stop")
+                    help="要执行的 SDK API 名，如 movej/move_l/ik/zero_g/emergency_stop")
     ap.add_argument("--args", default="{}",
-                    help="API 的 kwargs，JSON 字典，如 '{\"q_target\":[...],\"speed\":0.1}'")
+                    help="API 的 kwargs，JSON 字典，如 '{\"q\":[...],\"speed\":0.1}'")
     ap.add_argument("--topic", default="/litearm/api_cmd",
                     help="发布 API 指令的 topic")
     return ap.parse_args()
