@@ -1,100 +1,106 @@
-# litearm 真机 + Isaac Sim 仿真同步联调
+# litearm Real Robot + Isaac Sim Synchronization
 
-三节点单向数据流：手动指定 SDK API → 真机执行 → 仿真跟随真机实时关节角。
+Three-node, one-way data flow: specify an SDK API manually → execute on the real robot → the simulation
+follows the real robot's joint angles in real time.
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
-│  publish_api.py  (节点1 · API指令发布器)                       │
-│  不连真机、不依赖 SDK；把要执行的 API + 参数打包成 JSON 发布     │
+│  publish_api.py  (Node 1 · API command publisher)             │
+│  No robot connection, no SDK dependency; packages the API      │
+│  and its args into a JSON message and publishes it             │
 └──────────────────────────────┬───────────────────────────────┘
                                │  std_msgs/String
                                │  /litearm/api_cmd
                                │  {"api": "movej", "args": {...}}
                                ▼
 ┌──────────────────────────────────────────────────────────────┐
-│  real_robot_bridge.py  (节点2 · 真机桥接)                      │
-│  订阅指令 → 反射调 arm.<api>(**args) 驱动真机                   │
-│  同时周期读 arm.get_state().value.q → 发布实时关节角            │
+│  real_robot_bridge.py  (Node 2 · real robot bridge)           │
+│  Subscribes to commands → reflectively calls arm.<api>(**args) │
+│  to drive the robot; also polls arm.get_state().value.q and    │
+│  publishes the live joint angles                               │
 └──────────────────────────────┬───────────────────────────────┘
                                │  sensor_msgs/JointState
                                │  /litearm/joint_state
                                ▼
 ┌──────────────────────────────────────────────────────────────┐
-│  isaac_sim_node.py  (节点3 · 仿真节点)                          │
-│  订阅实时关节角 → 逐帧写入 USD 关节 (真机怎么动、仿真怎么动)     │
+│  isaac_sim_node.py  (Node 3 · simulation node)                │
+│  Subscribes to live joint angles → writes them into the USD    │
+│  joints every frame (as the robot moves, so does the sim)      │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-核心思想：仿真跟随的是「真机实际在哪」，而不是「规划了什么轨迹」。
-因此无论动作由哪个 SDK API（movej/move_p/move_l/零重力拖拽…）产生，
-真机一动、状态广播关节角一变，仿真就跟着动。
+Core idea: the simulation follows *where the real robot actually is*, not *what trajectory was planned*.
+So no matter which SDK API produced the motion (movej / move_p / move_l / zero-g drag, …),
+the moment the real robot moves and the broadcast joint angles change, the simulation follows.
 
 ## SDK
 
-真机侧用 **`litearm-python-gitee`**（`/home/qql/sl/litearm-python-gitee`）——
-LiteArm **STM32 直连薄协议后端**：经 USB CDC 直接连 `litearm-stm32` 固件，
-**无 server、无 IP**。运动学 / 笛卡尔规划 / 动力学 / 控制律都在固件里，
-PC 侧只是薄封装（仅依赖 `pyserial`）。
+The robot side uses **`litearm-python-gitee`** (`/home/qql/sl/litearm-python-gitee`) —
+a LiteArm **STM32 direct-connection thin-protocol backend**: it talks to the
+`litearm-stm32` firmware over USB CDC, with **no server and no IP**. Kinematics,
+Cartesian planning, dynamics, and control laws all live in the firmware; the PC side
+is a thin wrapper (depending only on `pyserial`).
 
-- CDC 自动发现（VID:PID `1d50:606f`），可用 `--port` 或环境变量 `LITEARM_PORT` 指定串口。
-- `connect()` 会校验固件版本约定 `Litearm<主.次.修>-{7J|1J}`（须 ≥1.5.0）。
-- **运动前必须先 `enable()`**（旧 server 模式不用）。节点2 连接后会自动 `enable()`；
-  未激活的板子 `enable()` 会被拒（`ERR{0x10,0x08}`），此时用 `license` / `activate` 诊断。
-- 读一帧的 getter（`get_state` / `get_tcp` / …）返回 `Msg` 信封，取值为 `.value`。
+- CDC auto-discovery (VID:PID `1d50:606f`); use `--port` or the `LITEARM_PORT` env var to specify a serial port.
+- `connect()` validates the firmware version string `Litearm<major.minor.patch>-{7J|1J}` (must be ≥1.5.0).
+- **`enable()` is mandatory before motion** (not needed in the old server mode). Node 2 calls `enable()` automatically after connecting;
+  an unlicensed board rejects `enable()` (`ERR{0x10,0x08}`) — use `license` / `activate` to diagnose in that case.
+- Single-frame getters (`get_state` / `get_tcp` / …) return a `Msg` envelope; read the value via `.value`.
 
-## 文件清单
+## File List
 
-| 文件 | 说明 |
-|------|------|
-| `publish_api.py` | 节点1：手动指定 API，打包 JSON 指令发布（不连真机） |
-| `real_robot_bridge.py` | 节点2：订阅指令反射调 SDK 驱动真机，发布实时关节角 |
-| `isaac_sim_node.py` | 节点3：订阅实时关节角，驱动 USD 关节 |
-| `bridge.launch.py` | 启动节点2 的 ROS2 launch（串口用 `port:=` 传参，留空=自动发现） |
-| `start_all.sh` | 一键启动节点3（后台）+ 节点2（前台） |
-| `run_sim.sh` | 启动仿真节点（节点3）的脚本（含 Isaac Sim 环境设置） |
-| `README.md` | 本文件 |
+| File | Description |
+|------|-------------|
+| `publish_api.py` | Node 1: specify an API manually, package it as a JSON command and publish it (no robot connection) |
+| `real_robot_bridge.py` | Node 2: subscribe to commands, reflectively call the SDK to drive the robot, publish live joint angles |
+| `isaac_sim_node.py` | Node 3: subscribe to live joint angles, drive the USD joints |
+| `bridge.launch.py` | ROS2 launch for Node 2 (pass the serial port via `port:=`; leave empty for auto-discovery) |
+| `start_all.sh` | One-shot launcher for Node 3 (background) + Node 2 (foreground) |
+| `run_sim.sh` | Launcher script for the simulation node (Node 3), including Isaac Sim environment setup |
+| `README.md` | This file (English) |
+| `readme_zn.md` | Chinese version of this document |
 
-## 依赖
+## Dependencies
 
-### 1. 真机侧（节点1 + 节点2）
+### 1. Robot side (Node 1 + Node 2)
 
-- Python 3 + `litearm-python-gitee`（STM32 直连 SDK，源码在 `/home/qql/sl/litearm-python-gitee`，
-  用 `PYTHONPATH` 指向它的 `src` 即可，无需 pip 安装）
-- `pyserial`（系统 `python3` 已具备）
-- ROS2 Humble（`std_msgs`、`sensor_msgs`、`rclpy`）
-- 机械臂经 STM32 USB CDC 直连本机（无需工控机 / 无线）
+- Python 3 + `litearm-python-gitee` (STM32 direct SDK; source at `/home/qql/sl/litearm-python-gitee`,
+  point `PYTHONPATH` at its `src`, no pip install needed)
+- `pyserial` (already available in the system `python3`)
+- ROS2 Humble (`std_msgs`, `sensor_msgs`, `rclpy`)
+- Robotic arm connected directly to this machine via STM32 USB CDC (no IPC / wireless needed)
 
 ```bash
 export PYTHONPATH=/home/qql/sl/litearm-python-gitee/src:$PYTHONPATH
-source /opt/ros/humble/setup.zsh   # 或 setup.bash
+source /opt/ros/humble/setup.zsh   # or setup.bash
 ```
 
-### 2. 仿真侧（节点3）
+### 2. Simulation side (Node 3)
 
-- Isaac Sim 5.x（本机路径 `/home/qql/nvidia/isaac-sim`）
-- 干净 USD：`/home/qql/litearm_isaacsim_import/litearm_clean.usd`
-  （关节名大写 `Joint1`~`Joint7`）
-- ROS2 bridge 扩展（`isaacsim.ros2.bridge`，内部 rclpy）
+- Isaac Sim 5.x (local path `/home/qql/nvidia/isaac-sim`)
+- Clean USD: `/home/qql/litearm_isaacsim_import/litearm_clean.usd`
+  (joint names capitalized `Joint1`–`Joint7`)
+- ROS2 bridge extension (`isaacsim.ros2.bridge`, which bundles rclpy)
 
-## 运行步骤
+## Running
 
-⚠️ **先启动节点2（真机桥接）和节点3（仿真），最后再敲节点1指令**，
-否则节点1 等不到订阅者会超时。
+⚠️ **Start Node 2 (real robot bridge) and Node 3 (simulation) first, and only then issue Node 1 commands**,
+otherwise Node 1 will time out waiting for subscribers.
 
-### 一键启动（推荐）
+### One-shot launch (recommended)
 
-`start_all.sh` 自动先起节点3（Isaac Sim，后台）再起节点2（真机桥接，前台），
-串口作为第一个参数传入（默认留空 = 自动发现）：
+`start_all.sh` starts Node 3 (Isaac Sim, background) and then Node 2 (real robot bridge, foreground).
+The serial port is passed as the first argument (empty by default = auto-discovery):
 
 ```bash
 cd /home/qql/sl/litearm_sync_release
-./start_all.sh                     # 自动发现 CDC
-./start_all.sh /dev/ttyACM0        # 指定串口
+./start_all.sh                     # auto-discover CDC
+./start_all.sh /dev/ttyACM0        # explicit serial port
 ```
 
-Ctrl+C 退出节点2 时会同时清理后台的节点3。
+Pressing Ctrl+C to exit Node 2 also cleans up the background Node 3.
 
-命令节点需自己启动
+The command node must be started separately:
 
 ```bash
 cd /home/qql/sl/litearm_sync_release
@@ -102,19 +108,19 @@ export PYTHONPATH=/home/qql/sl/litearm-python-gitee/src:$PYTHONPATH
 source /opt/ros/humble/setup.zsh
 ```
 
-### 分开启动（三个终端，调试用）
+### Separate launch (three terminals, for debugging)
 
-#### 终端 1 · 节点2 真机桥接（⚠️ 会真实运动）
+#### Terminal 1 · Node 2 real robot bridge (⚠️ causes real motion)
 
 ```bash
 export PYTHONPATH=/home/qql/sl/litearm-python-gitee/src:$PYTHONPATH
 source /opt/ros/humble/setup.zsh
-python3 /home/qql/sl/litearm_sync_release/real_robot_bridge.py            # 自动发现 CDC
+python3 /home/qql/sl/litearm_sync_release/real_robot_bridge.py            # auto-discover CDC
 python3 /home/qql/sl/litearm_sync_release/real_robot_bridge.py --port /dev/ttyACM0
-python3 /home/qql/sl/litearm_sync_release/real_robot_bridge.py --no-enable  # 只读联调（不使能）
+python3 /home/qql/sl/litearm_sync_release/real_robot_bridge.py --no-enable  # read-only bring-up (no enable)
 ```
 
-或用 launch 启动（串口用 `port:=` 传参，留空=自动发现）：
+Or launch it via ROS2 (pass the serial port via `port:=`; empty = auto-discovery):
 
 ```bash
 export PYTHONPATH=/home/qql/sl/litearm-python-gitee/src:$PYTHONPATH
@@ -122,104 +128,112 @@ source /opt/ros/humble/setup.zsh
 ros2 launch /home/qql/sl/litearm_sync_release/bridge.launch.py port:=/dev/ttyACM0
 ```
 
-#### 终端 2 · 节点3 仿真
+#### Terminal 2 · Node 3 simulation
 
 ```bash
 cd /home/qql/sl/litearm_sync_release
 ./run_sim.sh
 ```
 
-#### 终端 3 · 节点1 发布 API 指令（手动指定，每次一条）
+#### Terminal 3 · Node 1 publishing API commands (manual, one per invocation)
 
 ```bash
 export PYTHONPATH=/home/qql/sl/litearm-python-gitee/src:$PYTHONPATH
 source /opt/ros/humble/setup.zsh
 
-# 关节空间运动（q 为目标关节角，speed 建议先 0.1 低速验证）
+# Joint-space motion (q is the target joint angles; start with speed 0.1 for a low-speed check)
 python3 /home/qql/sl/litearm_sync_release/publish_api.py \
   --api movej --args '{"q":[0,0.6,0,-1.2,0,0.7,0],"speed":0.1}'
 
-# 笛卡尔直线（pose = 位置3 + rpy3，或 + 3x3旋转矩阵）
+# Cartesian straight line (pose = position3 + rpy3, or + 3x3 rotation matrix)
 python3 /home/qql/sl/litearm_sync_release/publish_api.py \
   --api move_l --args '{"pose":[0.30,0,0.35,3.1416,0,0],"speed":0.1}'
 
-# 固件异步 IK：pose -> 关节角（不动电机，结果看节点2日志）
+# Firmware async IK: pose -> joint angles (does not move the motors; check Node 2 logs for the result)
 python3 /home/qql/sl/litearm_sync_release/publish_api.py \
   --api ik --args '{"pose":[0.30,0,0.35,3.1416,0,0]}'
 
-# 读当前末端位姿（只读）
+# Read the current end-effector pose (read-only)
 python3 /home/qql/sl/litearm_sync_release/publish_api.py \
   --api get_tcp --args '{}'
 
-# 零重力（⚠️ 臂会瘫软，人须扶住；进入后须显式退出）
+# Zero gravity (⚠️ the arm goes limp — hold it by hand; must be explicitly exited afterwards)
 python3 /home/qql/sl/litearm_sync_release/publish_api.py \
   --api zero_g --args '{}'
 python3 /home/qql/sl/litearm_sync_release/publish_api.py \
   --api zero_g_stop --args '{}'
 
-# 急停
+# Emergency stop
 python3 /home/qql/sl/litearm_sync_release/publish_api.py \
   --api emergency_stop --args '{}'
 ```
 
-## 节点1 参数
+## Node 1 Arguments
 
-| 参数 | 默认 | 说明 |
-|------|------|------|
-| `--api` | 必填 | 要执行的 SDK API 名（见下） |
-| `--args` | `{}` | API 的 kwargs，JSON 字典字符串（形参名即 SDK 形参名） |
-| `--topic` | `/litearm/api_cmd` | 发布指令的 topic |
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--api` | required | Name of the SDK API to execute (see below) |
+| `--args` | `{}` | kwargs for the API, as a JSON object string (parameter names match the SDK's) |
+| `--topic` | `/litearm/api_cmd` | Topic on which to publish commands |
 
-节点2 的 `real_robot_bridge.py` 参数：
+Arguments for Node 2 `real_robot_bridge.py`:
 
-| 参数 | 默认 | 说明 |
-|------|------|------|
-| `--port` | 自动发现 | STM32 CDC 串口；缺省用 `LITEARM_PORT`，再缺省自动发现 `1d50:606f` |
-| `--no-enable` | 关 | 连接后不自动 `enable()`（只读联调） |
-| `--cmd-topic` | `/litearm/api_cmd` | 订阅指令的 topic |
-| `--state-topic` | `/litearm/joint_state` | 发布实时关节状态的 topic |
-| `--rate` | `50` | 状态发布频率 Hz |
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--port` | auto-discover | STM32 CDC serial port; falls back to `LITEARM_PORT`, then to auto-discovery of `1d50:606f` |
+| `--no-enable` | off | Do not call `enable()` automatically after connecting (read-only bring-up) |
+| `--cmd-topic` | `/litearm/api_cmd` | Topic to subscribe to for commands |
+| `--state-topic` | `/litearm/joint_state` | Topic on which to publish live joint state |
+| `--rate` | `50` | State publish rate in Hz |
 
-支持的 API 即 `litearm.Arm`（新 SDK）的公开方法，常见的有：
+The supported APIs are the public methods of `litearm.Arm` (the new SDK). Common ones:
 
-- 连接/使能：`connect`、`reconnect`、`close`、`enable`、`disable`
-- 运动：`movej`、`movej_sync`、`move_p`（关节空间 PTP）、`home`
-- 笛卡尔（固件规划）：`move_l`（直线）、`move_c`（圆弧，起点须为实测 TCP）、`move_path`（多路点）
-- 查询/计算：`get_state`、`get_status_now`、`get_tcp`、`ik`
-- 安全：`emergency_stop`、`reset`、`clear_faults`
-- 零重力：`zero_g`（进入 + 后台保活）、`zero_g_stop`（退出）
-- 连续伺服/透传：`move_js`、`send_mit`、`send_mit_all`
-- 调参：`set_speed`、`park`、`set_motion_mode`、`set_*` / `get_*`（动力学与控制律）
-- 授权：`license`、`activate`
+- Connect/enable: `connect`, `reconnect`, `close`, `enable`, `disable`
+- Motion: `movej`, `movej_sync`, `move_p` (joint-space PTP), `home`
+- Cartesian (firmware-planned): `move_l` (straight line), `move_c` (arc; start point must be the measured TCP), `move_path` (multi-waypoint)
+- Query/compute: `get_state`, `get_status_now`, `get_tcp`, `ik`
+- Safety: `emergency_stop`, `reset`, `clear_faults`
+- Zero gravity: `zero_g` (enter + background keep-alive), `zero_g_stop` (exit)
+- Continuous servo/passthrough: `move_js`, `send_mit`, `send_mit_all`
+- Tuning: `set_speed`, `park`, `set_motion_mode`, `set_*` / `get_*` (dynamics and control laws)
+- Licensing: `license`, `activate`
 
-> 反射只到顶层可调用方法，`arm.params.*` / `arm.log.*` / `arm.diag.*` 等子命名空间
-> 不经节点1（要用直接写脚本调 SDK）。
+> Reflection only reaches top-level callable methods. Sub-namespaces such as
+> `arm.params.*` / `arm.log.*` / `arm.diag.*` are not reachable through Node 1
+> (call the SDK directly in a script if you need them).
 
-⚠️ 新 SDK **没有** `movel`/`movec`/`fk`/`hold`/`joint_impedance` 等
-（PC 侧不做规划/力控；FK 只有当前反馈 `get_tcp()`，没有任意关节角 `fk(q)`）。
-高级力控场景仍走 `pylitearm` + server。
+⚠️ The new SDK does **not** have `movel`/`movec`/`fk`/`hold`/`joint_impedance`, etc.
+(planning/force control are not done on the PC side; FK is only the current feedback `get_tcp()`,
+there is no `fk(q)` for arbitrary joint angles).
+Advanced force-control scenarios still go through `pylitearm` + server.
 
-## 关键实现要点
+## Key Implementation Notes
 
-1. **统一 JSON 指令**：节点1 用 `std_msgs/String` 发 `{"api", "args"}`，
-   避免自定义消息在 Isaac Sim internal rclpy 里的编译加载坑。
-2. **反射调用**：节点2 `getattr(arm, api)(**kwargs)`，一套代码覆盖全部 API；
-   只放行公开可调用成员（挡 `_` 开头的内部属性）。
-3. **执行线程隔离**：运动类 API 会阻塞到到位，节点2 在独立线程执行，
-   不占用 spin 线程，保证状态发布 timer 不停、仿真持续跟随。
-4. **自动使能**：新 SDK 运动前必须先 `enable()`，节点2 连接后自动使能；
-   失败只告警不退出，便于诊断。
-5. **实时状态跟随**：仿真订阅 `/litearm/joint_state`（真机实际关节角），
-   优先写入；保留轨迹订阅（旧模式）作为降级。状态读取用 `get_state().value`
-   （`Msg` 信封；读的是固件 100Hz 状态流缓存，不逐次发报文）。
-6. **仿真驱动单位是「度」**：USD 关节 `targetPosition` 单位是度不是弧度，
-   仿真节点里用 `math.degrees()` 转换。
-7. **ROS2 回调不写 USD**：仿真节点回调只存最新关节角，主循环写 DriveAPI，
-   避免死锁。
+1. **Unified JSON commands**: Node 1 publishes `{"api", "args"}` using `std_msgs/String`,
+   avoiding the compile/load pitfalls of custom messages inside Isaac Sim's internal rclpy.
+2. **Reflective dispatch**: Node 2 does `getattr(arm, api)(**kwargs)`, covering all APIs with one code path;
+   only public callables are allowed (internal attributes starting with `_` are blocked).
+3. **Isolated execution thread**: motion APIs block until completion, so Node 2 executes them
+   on a separate thread. This keeps the spin thread free, so the state-publish timer never
+   stalls and the simulation keeps following.
+4. **Automatic enable**: the new SDK requires `enable()` before motion, so Node 2 enables
+   automatically after connecting; failures are warnings only (not fatal) to aid diagnosis.
+5. **Live state following**: the simulation subscribes to `/litearm/joint_state` (the robot's
+   actual joint angles) and writes it with priority; trajectory subscription (the old mode)
+   is kept as a fallback. State is read via `get_state().value` (a `Msg` envelope; it reads the
+   firmware's 100 Hz state-stream cache rather than sending a request per read).
+6. **Simulation drive unit is degrees**: the USD joint `targetPosition` is in degrees, not radians,
+   so the sim node converts with `math.degrees()`.
+7. **No USD writes from ROS2 callbacks**: the sim node's callback only stores the latest joint
+   angles; the main loop writes the DriveAPI, avoiding deadlock.
 
-## 安全提示
+## Safety Notes
 
-- ⚠️ 真机会真实运动！运行前确认机械臂上电、工作区无人、急停在手边。
-- 节点2 启动即自动使能（机械臂上力）；只做联调可加 `--no-enable`。
-- 首次建议 `--args` 里 `"speed":0.1` 低速验证，确认无异常后再提速。
-- 零重力/力控类会让臂瘫软，务必有人扶住机械臂再执行；`zero_g` 进入后须 `zero_g_stop` 退出。
+- ⚠️ The real robot will actually move! Before running, confirm the arm is powered, the workspace is clear,
+  and the e-stop is within reach.
+- Node 2 enables automatically at startup (the arm becomes powered). Use `--no-enable` for a
+  bring-up-only, read-only session.
+- For a first run, use `"speed":0.1` in `--args` to verify at low speed, then speed up after
+  confirming everything is normal.
+- Zero-gravity/force-control modes make the arm go limp — always have someone hold the arm before
+  executing them, and once in `zero_g` you must `zero_g_stop` to exit.
