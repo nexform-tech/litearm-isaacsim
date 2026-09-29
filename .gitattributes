@@ -1,0 +1,5 @@
+# Keep scripts and Python sources LF in the working tree so they run unchanged
+# inside the Linux devcontainer even when checked out on Windows.
+* text=auto
+*.py text eol=lf
+*.sh text eol=lf
