@@ -82,6 +82,21 @@ source /opt/ros/humble/setup.zsh   # or setup.bash
   (joint names capitalized `Joint1`–`Joint7`)
 - ROS2 bridge extension (`isaacsim.ros2.bridge`, which bundles rclpy)
 
+### 3. Path overrides
+
+Every hardcoded path above has an environment variable override with the old
+value as the default, so the same scripts run unchanged in the devcontainer and
+on machines whose paths differ:
+
+| Variable | Used by | Default |
+|----------|---------|---------|
+| `ISAAC_SIM_DIR` | Node 3 | `/home/qql/nvidia/isaac-sim` |
+| `LITEARM_USD` | Node 3 | `/home/qql/litearm_isaacsim_import/litearm_clean.usd` |
+| `LITEARM_SIM_LOG` | Node 3 | `/home/qql/sim_node_log.txt` |
+| `LITEARM_HEADLESS` | Node 3 | unset (window shown); set to `1` for headless |
+| `LITEARM_SDK_SRC` | Node 2 | `/home/qql/sl/litearm-python-gitee/src` |
+| `ROS_SETUP_BASH` | Node 2 | `/opt/ros/humble/setup.bash` |
+
 ## Running
 
 ⚠️ **Start Node 2 (real robot bridge) and Node 3 (simulation) first, and only then issue Node 1 commands**,
@@ -167,6 +182,106 @@ python3 /home/qql/sl/litearm_sync_release/publish_api.py \
 python3 /home/qql/sl/litearm_sync_release/publish_api.py \
   --api emergency_stop --args '{}'
 ```
+
+## Develop in a devcontainer
+
+This section is for developers who want the full Isaac Sim + ROS 2 environment
+in VS Code without installing either on the host. The repository ships a
+devcontainer definition that builds on the official Isaac Sim Docker image, so
+opening the folder in a container gives you all three nodes ready to run.
+
+### 1. Prerequisites
+
+- Docker with GPU support: Docker Engine with the
+  [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+  on Linux, or Docker Desktop with the WSL2 backend on Windows.
+- NVIDIA driver 570.169 or newer, the minimum the Isaac Sim 5.1.0 image
+  requires. Check with `nvidia-smi`.
+- VS Code with the
+  [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+  extension.
+- Network access to `nvcr.io` to pull the Isaac Sim image. No NGC login is
+  required for this image (verified against the `nvcr.io` registry API).
+
+### 2. Open the repository in the container
+
+1. Clone the repository and open it in VS Code.
+2. Press F1 and run **Dev Containers: Reopen in Container**. VS Code also
+   offers this command automatically when it detects the `.devcontainer`
+   folder. The first build pulls the Isaac Sim image and installs ROS 2
+   Jazzy, so it takes a while; rebuilds are faster.
+
+The image is Ubuntu 24.04, so Node 1 and Node 2 use ROS 2 Jazzy in the
+container, while Node 3 keeps the Humble rclpy bundled inside Isaac Sim's
+ROS2 bridge extension. The two sides talk over the default Fast DDS RMW,
+which is wire-compatible across distros (unverified: the container build was
+not executed on the machine where this was written).
+
+### 3. Provide the SDK and the USD scene (one-time)
+
+The container expects two inputs that are not in this repository, both kept in
+Docker volumes so they survive rebuilds:
+
+- `/opt/litearm-python-gitee` — the `litearm-python-gitee` SDK source
+  (`litearm-sdk` volume).
+- `/opt/litearm-assets/litearm_clean.usd` — the clean USD scene
+  (`litearm-assets` volume).
+
+Provide the SDK by setting the Gitee URL on the host before opening the
+container, then rebuild:
+
+```powershell
+$env:LITEARM_SDK_GIT_URL = "https://gitee.com/<your-org>/litearm-python-gitee.git"
+```
+
+Or clone it once from a terminal inside the container; the volume keeps it
+across rebuilds:
+
+```bash
+git clone https://gitee.com/<your-org>/litearm-python-gitee.git /opt/litearm-python-gitee
+```
+
+Copy the USD scene into the assets volume from the host (run this in the
+repository directory):
+
+```bash
+docker run --rm -v litearm-assets:/assets -v "$PWD":/host alpine \
+    cp /host/litearm_clean.usd /assets/litearm_clean.usd
+```
+
+### 4. Run the nodes
+
+Inside the container terminal the commands are the same as on bare metal; all
+paths are set by the devcontainer environment:
+
+```bash
+cd /workspaces/litearm-isaacsim
+./run_sim.sh        # Node 3: simulation
+./start_all.sh      # Node 3 (background) + Node 2 (real robot)
+python3 publish_api.py --api movej --args '{"q":[0,0.6,0,-1.2,0,0.7,0],"speed":0.1}'
+```
+
+Read [Running](#running) and [Safety Notes](#safety-notes) before driving the
+real robot.
+
+### 5. GUI, headless mode, and platform limits
+
+- **GUI on a Linux host:** the devcontainer mounts the X11 socket and forwards
+  `DISPLAY`. Run `xhost +local:` on the host first. On Windows, install an X
+  server such as VcXsrv and allow connections from the container.
+- **Headless:** run `LITEARM_HEADLESS=1 ./run_sim.sh` to start the simulation
+  without a window.
+- **Livestream to a browser:** Isaac Sim's WebRTC livestream needs host
+  networking, which the devcontainer does not use by default. Do not rely on
+  the forwarded ports 49100/47998 for the video stream; on Linux hosts add
+  `"--network=host"` to `runArgs` in `.devcontainer/devcontainer.json` and
+  start the container in livestream mode.
+- **Real robot (Node 2):** USB passthrough works on Linux hosts. Docker
+  Desktop on Windows and macOS cannot pass USB devices into containers, so
+  Node 2 cannot reach the robot there; Nodes 1 and 3 still work.
+- **Isaac Sim version:** the devcontainer builds
+  `nvcr.io/nvidia/isaac-sim:5.1.0` by default. Change `ISAAC_SIM_TAG` in
+  `.devcontainer/devcontainer.json` to switch versions.
 
 ## Node 1 Arguments
 

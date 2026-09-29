@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Isaac Sim 仿真节点：订阅 ROS2 /litearm/joint_target 驱动 USD 关节。
+"""Isaac Sim 仿真节点：订阅 ROS2 /litearm/joint_traj 与 /litearm/joint_state 驱动 USD 关节。
 
-运行方式（不要 source 系统 Humble，用 bash 设 internal rclpy 路径；绕开 python.sh 的 $args bug）：
-  cd /home/qql/nvidia/isaac-sim
-  bash -c 'source ./setup_python_env.sh && source ./setup_ros_env.sh && \
-    export LD_LIBRARY_PATH="$PWD/exts/isaacsim.ros2.bridge/humble/lib:$LD_LIBRARY_PATH" && \
-    export LD_PRELOAD=$PWD/kit/libcarb.so && \
-    export CARB_APP_PATH=$PWD/kit ISAAC_PATH=$PWD EXP_PATH=$PWD/apps && \
-    ./kit/python/bin/python3 /home/qql/sl/litearm_sync/isaac_sim_node.py'
+运行方式：用仓库里的 run_sim.sh 启动（它负责 Isaac Sim 的 Python/ROS 环境、
+internal rclpy 路径和 kit 预加载；不要 source 系统 Humble，绕开 python.sh 的
+$args bug）。路径均可用环境变量覆盖：
+
+  ISAAC_SIM_DIR   Isaac Sim 安装目录（默认 /home/qql/nvidia/isaac-sim）
+  LITEARM_USD     USD 场景路径（默认 /home/qql/litearm_isaacsim_import/litearm_clean.usd）
+  LITEARM_SIM_LOG 日志文件（默认 /home/qql/sim_node_log.txt）
+  LITEARM_HEADLESS 设为 1 时无头运行（默认 0，显示 GUI）
 """
 import threading
 import sys
@@ -16,8 +17,10 @@ import os
 import math
 import time as _time
 
-LOG = "/home/qql/sim_node_log.txt"
-USD_PATH = "/home/qql/litearm_isaacsim_import/litearm_clean.usd"
+ISAAC_SIM_DIR = os.environ.get("ISAAC_SIM_DIR", "/home/qql/nvidia/isaac-sim")
+LOG = os.environ.get("LITEARM_SIM_LOG", "/home/qql/sim_node_log.txt")
+USD_PATH = os.environ.get("LITEARM_USD",
+                          "/home/qql/litearm_isaacsim_import/litearm_clean.usd")
 
 
 def log(msg):
@@ -40,7 +43,7 @@ from isaacsim import SimulationApp
 # 关键：混合显卡（Intel 核显 + NVIDIA 独显）机器上必须关掉 multiGpu，
 #       否则渲染 graph 状态不一致，USD reopen 时段错误崩溃
 simulation_app = SimulationApp({
-    "headless": False,
+    "headless": os.environ.get("LITEARM_HEADLESS", "0") == "1",
     "width": 1280,
     "height": 720,
     "anti_aliasing": "FXAA",
@@ -54,7 +57,7 @@ from pxr import UsdPhysics, Usd
 log("SimulationApp 创建完成")
 
 # ── 1. 注入 internal rclpy 路径（必须先于 enable_extension，否则报 no attribute 'impl'）──
-BRIDGE_RCLPY = "/home/qql/nvidia/isaac-sim/exts/isaacsim.ros2.bridge/humble/rclpy"
+BRIDGE_RCLPY = os.path.join(ISAAC_SIM_DIR, "exts/isaacsim.ros2.bridge/humble/rclpy")
 if os.path.isdir(BRIDGE_RCLPY):
     sys.path.insert(0, BRIDGE_RCLPY)
     log("已注入 internal rclpy 路径")

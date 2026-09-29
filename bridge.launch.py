@@ -4,13 +4,17 @@
 
 真机经 STM32 USB CDC 直连（litearm-python-gitee 薄协议 SDK），不走 server/IP。
 
-用法（需 ROS2 Humble，且新 SDK 的 src 在 PYTHONPATH 里）：
+用法（需 ROS2 环境——本机 Humble 或容器内 Jazzy，且新 SDK 的 src 在 PYTHONPATH 里）：
   ros2 launch bridge.launch.py                       # 自动发现 CDC
   ros2 launch bridge.launch.py port:=/dev/ttyACM0    # 指定串口
 """
+import os
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.substitutions import LaunchConfiguration
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def generate_launch_description():
@@ -24,7 +28,7 @@ def generate_launch_description():
     bridge = ExecuteProcess(
         cmd=[
             "python3",
-            "/home/qql/sl/litearm_sync_release/real_robot_bridge.py",
+            os.path.join(SCRIPT_DIR, "real_robot_bridge.py"),
             "--port", port,
         ],
         output="screen",

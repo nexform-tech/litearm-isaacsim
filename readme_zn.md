@@ -77,6 +77,20 @@ source /opt/ros/humble/setup.zsh   # 或 setup.bash
   （关节名大写 `Joint1`~`Joint7`）
 - ROS2 bridge 扩展（`isaacsim.ros2.bridge`，内部 rclpy）
 
+### 3. 路径覆盖
+
+上面所有硬编码路径都有环境变量覆盖，旧值仍是默认值，因此同一套脚本在
+devcontainer 和路径不同的机器上都能原样运行：
+
+| 变量 | 使用方 | 默认值 |
+|----------|---------|---------|
+| `ISAAC_SIM_DIR` | 节点3 | `/home/qql/nvidia/isaac-sim` |
+| `LITEARM_USD` | 节点3 | `/home/qql/litearm_isaacsim_import/litearm_clean.usd` |
+| `LITEARM_SIM_LOG` | 节点3 | `/home/qql/sim_node_log.txt` |
+| `LITEARM_HEADLESS` | 节点3 | 不设置（显示窗口）；设为 `1` 时无头运行 |
+| `LITEARM_SDK_SRC` | 节点2 | `/home/qql/sl/litearm-python-gitee/src` |
+| `ROS_SETUP_BASH` | 节点2 | `/opt/ros/humble/setup.bash` |
+
 ## 运行步骤
 
 ⚠️ **先启动节点2（真机桥接）和节点3（仿真），最后再敲节点1指令**，
@@ -161,6 +175,94 @@ python3 /home/qql/sl/litearm_sync_release/publish_api.py \
 python3 /home/qql/sl/litearm_sync_release/publish_api.py \
   --api emergency_stop --args '{}'
 ```
+
+## 在 devcontainer 中开发
+
+本节面向想在 VS Code 里直接获得完整 Isaac Sim + ROS 2 环境、而不在宿主机上
+安装两者的开发者。仓库自带 devcontainer 定义，基于 NVIDIA 官方 Isaac Sim
+Docker 镜像构建，在容器中打开文件夹即可运行全部三个节点。
+
+### 1. 前置条件
+
+- 支持 GPU 的 Docker：Linux 上用 Docker Engine +
+  [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)，
+  Windows 上用 WSL2 后端的 Docker Desktop。
+- NVIDIA 驱动 570.169 或更新（Isaac Sim 5.1.0 镜像的最低要求），用
+  `nvidia-smi` 检查。
+- VS Code + [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+  扩展。
+- 能访问 `nvcr.io` 拉取 Isaac Sim 镜像。该镜像拉取无需 NGC 登录（已通过
+  `nvcr.io` registry API 验证）。
+
+### 2. 在容器中打开仓库
+
+1. 克隆仓库并用 VS Code 打开。
+2. 按 F1 运行 **Dev Containers: Reopen in Container**（VS Code 检测到
+   `.devcontainer` 目录时也会自动提示）。首次构建要拉取 Isaac Sim 镜像并
+   安装 ROS 2 Jazzy，比较耗时；之后重建会快很多。
+
+镜像基于 Ubuntu 24.04，因此容器里节点1、节点2 用 ROS 2 **Jazzy**，节点3
+仍用 Isaac Sim 自带 ROS2 bridge 扩展里的 Humble rclpy；两侧走默认的
+Fast DDS RMW 通信，跨发行版线缆协议兼容（未验证：本文撰写时未在这台机器上
+执行过容器构建）。
+
+### 3. 提供 SDK 与 USD 场景（一次性）
+
+容器需要两个不在仓库里的输入，都放在 Docker volume 里以便重建后仍然存在：
+
+- `/opt/litearm-python-gitee` — `litearm-python-gitee` SDK 源码
+  （`litearm-sdk` volume）。
+- `/opt/litearm-assets/litearm_clean.usd` — 干净 USD 场景
+  （`litearm-assets` volume）。
+
+打开容器前在宿主机上设置 Gitee 地址，然后重建，即可自动克隆 SDK：
+
+```powershell
+$env:LITEARM_SDK_GIT_URL = "https://gitee.com/<你的组织>/litearm-python-gitee.git"
+```
+
+也可以在容器内终端里克隆一次；volume 在重建后依然保留：
+
+```bash
+git clone https://gitee.com/<你的组织>/litearm-python-gitee.git /opt/litearm-python-gitee
+```
+
+在宿主机上把 USD 场景复制进 assets volume（在仓库目录下执行）：
+
+```bash
+docker run --rm -v litearm-assets:/assets -v "$PWD":/host alpine \
+    cp /host/litearm_clean.usd /assets/litearm_clean.usd
+```
+
+### 4. 运行节点
+
+容器终端里的命令和裸机一致，所有路径都由 devcontainer 环境设好：
+
+```bash
+cd /workspaces/litearm-isaacsim
+./run_sim.sh        # 节点3：仿真
+./start_all.sh      # 节点3（后台）+ 节点2（真机桥接）
+python3 publish_api.py --api movej --args '{"q":[0,0.6,0,-1.2,0,0.7,0],"speed":0.1}'
+```
+
+驱动真机前请先读[运行步骤](#运行步骤)和[安全提示](#安全提示)。
+
+### 5. GUI、无头模式与平台限制
+
+- **Linux 宿主机 GUI：**devcontainer 已挂载 X11 socket 并透传 `DISPLAY`，
+  宿主机上先执行 `xhost +local:`。Windows 上安装 VcXsrv 等 X server 并允许
+  容器连接。
+- **无头模式：**`LITEARM_HEADLESS=1 ./run_sim.sh` 即可无窗口启动仿真。
+- **浏览器推流：**Isaac Sim 的 WebRTC 推流需要 host 网络，devcontainer
+  默认不用 host 网络。不要指望转发的 49100/47998 端口能传视频流；Linux
+  宿主机可在 `.devcontainer/devcontainer.json` 的 `runArgs` 里加
+  `"--network=host"`，再以推流模式启动容器。
+- **真机（节点2）：**USB 透传只在 Linux 宿主机上可用。Windows 和 macOS 的
+  Docker Desktop 无法把 USB 设备传进容器，因此节点2 在这类机器上连不到
+  真机；节点1、节点3 不受影响。
+- **Isaac Sim 版本：**devcontainer 默认构建
+  `nvcr.io/nvidia/isaac-sim:5.1.0`。改 `.devcontainer/devcontainer.json`
+  里的 `ISAAC_SIM_TAG` 即可换版本。
 
 ## 节点1 参数
 

@@ -1,0 +1,52 @@
+{
+    "name": "litearm-isaacsim: Isaac Sim + ROS 2",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "args": {
+            "ISAAC_SIM_TAG": "5.1.0",
+            "LITEARM_SDK_GIT_URL": "${localEnv:LITEARM_SDK_GIT_URL}"
+        }
+    },
+    "hostRequirements": {
+        "gpu": "optional",
+        "memory": "16gb"
+    },
+    "remoteUser": "root",
+    "runArgs": [
+        "--device-cgroup-rule=c 166:* rmw",
+        "--device-cgroup-rule=c 188:* rmw"
+    ],
+    "mounts": [
+        "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind",
+        "source=litearm-sdk,target=/opt/litearm-python-gitee,type=volume",
+        "source=litearm-assets,target=/opt/litearm-assets,type=volume",
+        "source=isaac-sim-cache,target=/isaac-sim/.cache,type=volume",
+        "source=isaac-sim-computecache,target=/isaac-sim/.nv/ComputeCache,type=volume",
+        "source=isaac-sim-omniverse,target=/isaac-sim/.nvidia-omniverse,type=volume"
+    ],
+    "containerEnv": {
+        "ACCEPT_EULA": "Y",
+        "PYTHONPATH": "/opt/litearm-python-gitee/src",
+        "LITEARM_SDK_SRC": "/opt/litearm-python-gitee/src",
+        "ROS_SETUP_BASH": "/opt/ros/jazzy/setup.bash",
+        "ISAAC_SIM_DIR": "/isaac-sim",
+        "LITEARM_USD": "/opt/litearm-assets/litearm_clean.usd",
+        "LITEARM_SIM_LOG": "/tmp/litearm_sim_node.log"
+    },
+    "remoteEnv": {
+        "DISPLAY": "${localEnv:DISPLAY}",
+        "XAUTHORITY": "${localEnv:XAUTHORITY}"
+    },
+    "forwardPorts": [
+        49100,
+        "47998/udp"
+    ],
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance"
+            ]
+        }
+    }
+}
