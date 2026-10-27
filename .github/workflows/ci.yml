@@ -8,9 +8,6 @@
 # litearm SDK and Isaac Sim, none of which install on a plain CI runner, so this
 # gate checks that every source file parses instead of importing it. Behaviour
 # is covered by the on-hardware runs documented in README.md.
-#
-# AGENTS.md is deliberately not linted: it is canonical content synced from
-# repo-template and must not be edited here.
 name: CI
 
 on:
@@ -45,7 +42,6 @@ jobs:
         run: |
           set -euo pipefail
           test -s README.md
-          test -s AGENTS.md
           test -s LICENSE
           python3 -c "import json; json.load(open('.releaserc.json'))"
           python3 -c "import json; json.load(open('.markdownlint.json'))"
